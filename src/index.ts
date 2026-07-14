@@ -2,8 +2,9 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import multer from "multer";
+import { ObjectId } from "mongodb";
 import { connectToDatabase } from "./db";
-import { hashPassword, verifyPassword, signToken } from "./auth";
+import { hashPassword, verifyPassword, signToken, verifyToken } from "./auth";
 
 dotenv.config();
 
@@ -149,8 +150,11 @@ app.post("/api/auth/login", async (req, res) => {
       token,
       user: {
         id: user._id.toString(),
+        name: user.name || "",
         email: user.email,
         role: user.role,
+        imageUrl: user.imageUrl || "",
+        createdAt: user.createdAt,
       },
     });
   } catch (err: any) {
@@ -159,7 +163,91 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-// 4. Get All Plants Route
+// 4. Get current user profile (GET /api/auth/me)
+app.get("/api/auth/me", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload) {
+      return res.status(401).json({ message: "Invalid or expired token" });
+    }
+    const { db } = await connectToDatabase();
+    const user = await db.collection("users").findOne({ email: payload.email });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    return res.status(200).json({
+      id: user._id.toString(),
+      name: user.name || "",
+      email: user.email,
+      role: user.role,
+      imageUrl: user.imageUrl || "",
+      createdAt: user.createdAt,
+    });
+  } catch (err: any) {
+    console.error("Get Me Error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 5. Update current user profile (PATCH /api/auth/me)
+app.patch("/api/auth/me", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload) {
+      return res.status(401).json({ message: "Invalid or expired token" });
+    }
+
+    const { name, imageUrl } = req.body;
+    const updates: Record<string, string> = {};
+    if (typeof name === "string") updates.name = name.trim();
+    if (typeof imageUrl === "string") updates.imageUrl = imageUrl.trim();
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: "No valid fields to update" });
+    }
+
+    let userId: ObjectId;
+    try {
+      userId = new ObjectId(payload.userId);
+    } catch {
+      return res.status(400).json({ message: "Invalid user ID in token" });
+    }
+
+    const { db } = await connectToDatabase();
+    const result = await db.collection("users").findOneAndUpdate(
+      { email: payload.email },
+      { $set: updates },
+      { returnDocument: "after" }
+    );
+
+    if (!result) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.status(200).json({
+      id: result._id.toString(),
+      name: result.name || "",
+      email: result.email,
+      role: result.role,
+      imageUrl: result.imageUrl || "",
+      createdAt: result.createdAt,
+    });
+  } catch (err: any) {
+    console.error("[PATCH /api/auth/me] Error:", err?.message || err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 6. Get All Plants Route
 app.get("/api/plants", async (req, res) => {
   try {
     const { db } = await connectToDatabase();
