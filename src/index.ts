@@ -159,6 +159,37 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+// 4. Get All Plants Route
+app.get("/api/plants", async (req, res) => {
+  try {
+    const { db } = await connectToDatabase();
+    const plants = await db.collection("plants").find({}).toArray();
+    
+    // Map _id to string id for the frontend
+    const mappedPlants = plants.map((plant: any) => ({
+      id: plant._id.toString(),
+      title: plant.title,
+      scientificName: plant.scientificName || "",
+      category: plant.category || "Foliage",
+      short: plant.short || "",
+      description: plant.description || "",
+      price: plant.price || 0,
+      image: plant.image || "",
+      difficulty: plant.difficulty || "Easy",
+      watering: plant.watering || "",
+      sunlight: plant.sunlight || "",
+      temperature: plant.temperature || "",
+      detailedCare: plant.detailedCare || [],
+      commonProblems: plant.commonProblems || [],
+    }));
+
+    return res.status(200).json(mappedPlants);
+  } catch (err: any) {
+    console.error("Fetch Plants Error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 // Start Express server
 app.listen(PORT, () => {
   console.log(`[server] LushLeaves server is running on http://localhost:${PORT}`);

@@ -18,6 +18,6 @@ clientPromise = client.connect();
 
 export async function connectToDatabase(): Promise<{ client: MongoClient; db: Db }> {
   const connectedClient = await clientPromise;
-  const db = connectedClient.db();
+  const db = connectedClient.db("LushLeaves");
   return { client: connectedClient, db };
 }
