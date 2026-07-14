@@ -251,7 +251,7 @@ app.patch("/api/auth/me", async (req, res) => {
 app.get("/api/plants", async (req, res) => {
   try {
     const { db } = await connectToDatabase();
-    const plants = await db.collection("plants").find({}).toArray();
+    const plants = await db.collection("plants").find({}).sort({ _id: -1 }).toArray();
     
     // Map _id to string id for the frontend
     const mappedPlants = plants.map((plant: any) => ({
