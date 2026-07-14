@@ -17,6 +17,10 @@ app.use(express.json());
 // Multer memory storage configuration for file uploads
 const upload = multer({ storage: multer.memoryStorage() });
 
+app.get("/", (req, res) => {
+  res.json({ message: "LushLeaves server is running" });
+});
+
 // 1. Image Upload Route (proxies multipart image upload to ImgBB)
 app.post("/api/upload-image", upload.single("image"), async (req, res) => {
   try {
