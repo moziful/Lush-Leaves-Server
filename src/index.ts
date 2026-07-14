@@ -278,6 +278,51 @@ app.get("/api/plants", async (req, res) => {
   }
 });
 
+// 7. Create a New Plant (Admin only)
+app.post("/api/plants", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+    const {
+      title, scientificName, category, short, description,
+      price, image, difficulty, watering, sunlight,
+      temperature, detailedCare, commonProblems,
+    } = req.body;
+    if (!title || !price || !image) {
+      return res.status(400).json({ message: "title, price, and image are required" });
+    }
+    const { db } = await connectToDatabase();
+    const newPlant = {
+      title: String(title).trim(),
+      scientificName: String(scientificName || "").trim(),
+      category: String(category || "Foliage").trim(),
+      short: String(short || "").trim(),
+      description: String(description || "").trim(),
+      price: Number(price),
+      image: String(image).trim(),
+      difficulty: ["Easy", "Medium", "Hard"].includes(difficulty) ? difficulty : "Easy",
+      watering: String(watering || "").trim(),
+      sunlight: String(sunlight || "").trim(),
+      temperature: String(temperature || "").trim(),
+      detailedCare: Array.isArray(detailedCare) ? detailedCare : [],
+      commonProblems: Array.isArray(commonProblems) ? commonProblems : [],
+      createdAt: new Date(),
+    };
+    const result = await db.collection("plants").insertOne(newPlant);
+    return res.status(201).json({ message: "Plant created successfully", id: result.insertedId.toString() });
+  } catch (err: any) {
+    console.error("[POST /api/plants] Error:", err?.message || err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 // Start Express server
 app.listen(PORT, () => {
   console.log(`[server] LushLeaves server is running on http://localhost:${PORT}`);
