@@ -708,6 +708,69 @@ app.delete("/api/admin/coupons/:id", async (req, res) => {
   }
 });
 
+// 16.9 User: Submit New Checkout Order
+app.post("/api/orders", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const { items, total } = req.body;
+    if (!items || !Array.isArray(items) || items.length === 0 || !total) {
+      return res.status(400).json({ message: "Invalid checkout request body" });
+    }
+
+    const { db } = await connectToDatabase();
+    const newOrder = {
+      userId: payload.id,
+      userEmail: payload.email,
+      items: items.map((item: any) => ({
+        plantId: item.plantId,
+        title: item.title,
+        quantity: Number(item.quantity),
+        price: Number(item.price)
+      })),
+      total: Number(total),
+      status: "Pending",
+      createdAt: new Date()
+    };
+
+    const result = await db.collection("orders").insertOne(newOrder);
+    return res.status(201).json({ message: "Order placed successfully", orderId: result.insertedId.toString() });
+  } catch (err: any) {
+    console.error("[POST /api/orders] Error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 16.10 User: Get Personal Order History & Metrics
+app.get("/api/orders/my-orders", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const { db } = await connectToDatabase();
+    const myOrders = await db.collection("orders").find({ userEmail: payload.email }).sort({ createdAt: -1 }).toArray();
+    return res.status(200).json(myOrders);
+  } catch (err: any) {
+    console.error("[GET /api/orders/my-orders] Error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 // 17. Admin: Get and Update Order Fulfillments
 app.get("/api/admin/orders", async (req, res) => {
   try {
