@@ -316,9 +316,501 @@ app.post("/api/plants", async (req, res) => {
       createdAt: new Date(),
     };
     const result = await db.collection("plants").insertOne(newPlant);
+    await logAdminAction(payload.email, `Created new plant: "${newPlant.title}" (${newPlant.category})`);
     return res.status(201).json({ message: "Plant created successfully", id: result.insertedId.toString() });
   } catch (err: any) {
     console.error("[POST /api/plants] Error:", err?.message || err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 8. Delete a Plant (Admin only)
+app.delete("/api/plants/:id", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { id } = req.params;
+    let plantId: ObjectId;
+    try {
+      plantId = new ObjectId(id);
+    } catch {
+      return res.status(400).json({ message: "Invalid plant ID" });
+    }
+
+    const { db } = await connectToDatabase();
+    
+    // Fetch plant details first to log its title
+    const plant = await db.collection("plants").findOne({ _id: plantId });
+    const plantTitle = plant ? plant.title : id;
+
+    const result = await db.collection("plants").deleteOne({ _id: plantId });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: "Plant not found" });
+    }
+
+    await logAdminAction(payload.email, `Deleted plant: "${plantTitle}" (ID: ${id})`);
+    return res.status(200).json({ message: "Plant deleted successfully" });
+  } catch (err: any) {
+    console.error("[DELETE /api/plants/:id] Error:", err?.message || err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 9. Admin: Get all users
+app.get("/api/users", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { db } = await connectToDatabase();
+    const users = await db.collection("users").find({}).toArray();
+    const mappedUsers = users.map((u: any) => ({
+      id: u._id.toString(),
+      name: u.name || "",
+      email: u.email,
+      role: u.role,
+      imageUrl: u.imageUrl || "",
+      createdAt: u.createdAt,
+    }));
+
+    return res.status(200).json(mappedUsers);
+  } catch (err: any) {
+    console.error("[GET /api/users] Error:", err?.message || err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 10. Admin: Change User Role
+app.patch("/api/users/:id/role", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { id } = req.params;
+    const { role } = req.body;
+    if (!["user", "admin"].includes(role)) {
+      return res.status(400).json({ message: "Invalid role value" });
+    }
+
+    let userId: ObjectId;
+    try {
+      userId = new ObjectId(id);
+    } catch {
+      return res.status(400).json({ message: "Invalid user ID" });
+    }
+
+    const { db } = await connectToDatabase();
+    
+    // Fetch user details first to log their email
+    const userToEdit = await db.collection("users").findOne({ _id: userId });
+    const userEmail = userToEdit ? userToEdit.email : id;
+
+    const result = await db.collection("users").updateOne(
+      { _id: userId },
+      { $set: { role } }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    await logAdminAction(payload.email, `Updated user role of "${userEmail}" to "${role}"`);
+    return res.status(200).json({ message: "User role updated successfully" });
+  } catch (err: any) {
+    console.error("[PATCH /api/users/:id/role] Error:", err?.message || err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 11. Admin: Delete User
+app.delete("/api/users/:id", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { id } = req.params;
+    let userId: ObjectId;
+    try {
+      userId = new ObjectId(id);
+    } catch {
+      return res.status(400).json({ message: "Invalid user ID" });
+    }
+
+    const { db } = await connectToDatabase();
+
+    // Fetch user details first to log email
+    const userToDelete = await db.collection("users").findOne({ _id: userId });
+    const userEmail = userToDelete ? userToDelete.email : id;
+
+    const result = await db.collection("users").deleteOne({ _id: userId });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    await logAdminAction(payload.email, `Deleted user account: "${userEmail}" (ID: ${id})`);
+    return res.status(200).json({ message: "User deleted successfully" });
+  } catch (err: any) {
+    console.error("[DELETE /api/users/:id] Error:", err?.message || err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 12. Submit Contact Message
+app.post("/api/contact", async (req, res) => {
+  try {
+    const { name, email, subject, message } = req.body;
+    if (!name || !email || !message) {
+      return res.status(400).json({ message: "Name, email, and message are required" });
+    }
+
+    const { db } = await connectToDatabase();
+    const newMessage = {
+      name: String(name).trim(),
+      email: String(email).trim().toLowerCase(),
+      subject: String(subject || "General Inquiry").trim(),
+      message: String(message).trim(),
+      createdAt: new Date(),
+      status: "unread",
+    };
+
+    await db.collection("contacts").insertOne(newMessage);
+    return res.status(201).json({ message: "Message submitted successfully" });
+  } catch (err: any) {
+    console.error("[POST /api/contact] Error:", err?.message || err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 13. Admin: Get all contact messages
+app.get("/api/contact", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { db } = await connectToDatabase();
+    const contacts = await db.collection("contacts").find({}).sort({ createdAt: -1 }).toArray();
+    const mapped = contacts.map((c: any) => ({
+      id: c._id.toString(),
+      name: c.name,
+      email: c.email,
+      subject: c.subject,
+      message: c.message,
+      createdAt: c.createdAt,
+      status: c.status || "unread",
+    }));
+
+    return res.status(200).json(mapped);
+  } catch (err: any) {
+    console.error("[GET /api/contact] Error:", err?.message || err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 14. Admin: Delete contact message
+app.delete("/api/contact/:id", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { id } = req.params;
+    let contactId: ObjectId;
+    try {
+      contactId = new ObjectId(id);
+    } catch {
+      return res.status(400).json({ message: "Invalid message ID" });
+    }
+
+    const { db } = await connectToDatabase();
+    const result = await db.collection("contacts").deleteOne({ _id: contactId });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: "Message not found" });
+    }
+
+    return res.status(200).json({ message: "Message deleted successfully" });
+  } catch (err: any) {
+    console.error("[DELETE /api/contact/:id] Error:", err?.message || err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 15. Admin: Get Activity Logs (Audit Trail)
+app.get("/api/admin/logs", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { db } = await connectToDatabase();
+    const logs = await db.collection("logs").find({}).sort({ timestamp: -1 }).limit(100).toArray();
+    return res.status(200).json(logs);
+  } catch (err: any) {
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Helper to log administrative actions
+async function logAdminAction(email: string, action: string) {
+  try {
+    const { db } = await connectToDatabase();
+    await db.collection("logs").insertOne({
+      admin: email,
+      action,
+      timestamp: new Date(),
+    });
+  } catch (e) {
+    console.error("Failed to log admin action:", e);
+  }
+}
+
+// 16. Admin: Get and Create Promo Codes (Coupons)
+app.get("/api/admin/coupons", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { db } = await connectToDatabase();
+    const coupons = await db.collection("coupons").find({}).sort({ createdAt: -1 }).toArray();
+    return res.status(200).json(coupons);
+  } catch (err: any) {
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+app.post("/api/admin/coupons", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { code, discount, isActive } = req.body;
+    if (!code || typeof discount !== "number") {
+      return res.status(400).json({ message: "code and discount are required" });
+    }
+
+    const { db } = await connectToDatabase();
+    const newCoupon = {
+      code: String(code).trim().toUpperCase(),
+      discount: Number(discount),
+      isActive: Boolean(isActive),
+      createdAt: new Date(),
+    };
+
+    await db.collection("coupons").insertOne(newCoupon);
+    await logAdminAction(payload.email, `Created promo code: ${newCoupon.code}`);
+    return res.status(201).json({ message: "Promo code created successfully" });
+  } catch (err: any) {
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 16.2 Admin: Delete Promo Code (Coupon)
+app.delete("/api/admin/coupons/:id", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { id } = req.params;
+    let couponId: ObjectId;
+    try {
+      couponId = new ObjectId(id);
+    } catch {
+      return res.status(400).json({ message: "Invalid coupon ID" });
+    }
+
+    const { db } = await connectToDatabase();
+    const result = await db.collection("coupons").deleteOne({ _id: couponId });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: "Promo code not found" });
+    }
+
+    await logAdminAction(payload.email, `Deleted promo code ID: ${id}`);
+    return res.status(200).json({ message: "Promo code deleted successfully" });
+  } catch (err: any) {
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 17. Admin: Get and Update Order Fulfillments
+app.get("/api/admin/orders", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { db } = await connectToDatabase();
+    const orders = await db.collection("orders").find({}).sort({ createdAt: -1 }).toArray();
+    return res.status(200).json(orders);
+  } catch (err: any) {
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+app.patch("/api/admin/orders/:id", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { id } = req.params;
+    const { status } = req.body;
+    if (!["Pending", "Processing", "Shipped", "Delivered"].includes(status)) {
+      return res.status(400).json({ message: "Invalid order status value" });
+    }
+
+    const { db } = await connectToDatabase();
+    const result = await db.collection("orders").updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status } }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    await logAdminAction(payload.email, `Updated order status of ${id} to ${status}`);
+    return res.status(200).json({ message: "Order status updated successfully" });
+  } catch (err: any) {
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 18. Admin: Get and Update System Feature Flags
+app.get("/api/admin/config", async (req, res) => {
+  try {
+    const { db } = await connectToDatabase();
+    const config = await db.collection("config").findOne({ key: "system_features" });
+    if (!config) {
+      return res.status(200).json({ maintenanceMode: false, checkoutEnabled: true });
+    }
+    return res.status(200).json(config.value);
+  } catch (err: any) {
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+app.post("/api/admin/config", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+
+    const { maintenanceMode, checkoutEnabled } = req.body;
+    const { db } = await connectToDatabase();
+    
+    // Fetch current settings to identify changes
+    const configDoc = await db.collection("config").findOne({ key: "system_features" });
+    const currentVal = configDoc ? configDoc.value : { maintenanceMode: false, checkoutEnabled: true };
+
+    await db.collection("config").updateOne(
+      { key: "system_features" },
+      { $set: { value: { maintenanceMode: Boolean(maintenanceMode), checkoutEnabled: Boolean(checkoutEnabled) } } },
+      { upsert: true }
+    );
+
+    // Build user-friendly change log string
+    const changes: string[] = [];
+    if (currentVal.maintenanceMode !== Boolean(maintenanceMode)) {
+      changes.push(`turned ${maintenanceMode ? "on" : "off"} maintenance mode`);
+    }
+    if (currentVal.checkoutEnabled !== Boolean(checkoutEnabled)) {
+      changes.push(`turned ${checkoutEnabled ? "on" : "off"} checkout features`);
+    }
+
+    const actionText = changes.length > 0 ? changes.join(" and ") : "saved system settings";
+    await logAdminAction(payload.email, actionText);
+
+    return res.status(200).json({ message: "System configuration updated successfully" });
+  } catch (err: any) {
     return res.status(500).json({ message: "Internal server error" });
   }
 });
