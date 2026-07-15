@@ -1279,3 +1279,6 @@ app.post("/api/admin/config", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`[server] LushLeaves server is running on http://localhost:${PORT}`);
 });
+
+export default app;
+
