@@ -5,13 +5,19 @@ import multer from "multer";
 import { ObjectId } from "mongodb";
 import { connectToDatabase } from "./db";
 import { hashPassword, verifyPassword, signToken, verifyToken } from "./auth";
+import Stripe from "stripe";
 
 dotenv.config();
+
+const stripe = new Stripe(
+  process.env.STRIPE_SECRET_KEY || "",
+  { apiVersion: "2022-11-15" as any }
+);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Enable CORS and JSON parsing
+// Enable CORS and JSON parsing.
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
@@ -252,7 +258,7 @@ app.get("/api/plants", async (req, res) => {
   try {
     const { db } = await connectToDatabase();
     const plants = await db.collection("plants").find({}).sort({ _id: -1 }).toArray();
-    
+
     // Map _id to string id for the frontend
     const mappedPlants = plants.map((plant: any) => ({
       id: plant._id.toString(),
@@ -346,7 +352,7 @@ app.delete("/api/plants/:id", async (req, res) => {
     }
 
     const { db } = await connectToDatabase();
-    
+
     // Fetch plant details first to log its title
     const plant = await db.collection("plants").findOne({ _id: plantId });
     const plantTitle = plant ? plant.title : id;
@@ -423,7 +429,7 @@ app.patch("/api/users/:id/role", async (req, res) => {
     }
 
     const { db } = await connectToDatabase();
-    
+
     // Fetch user details first to log their email
     const userToEdit = await db.collection("users").findOne({ _id: userId });
     const userEmail = userToEdit ? userToEdit.email : id;
@@ -713,7 +719,7 @@ app.delete("/api/admin/coupons/:id", async (req, res) => {
     }
 
     const { db } = await connectToDatabase();
-    
+
     // Fetch coupon details first to log its name & discount
     const coupon = await db.collection("coupons").findOne({ _id: couponId });
     const couponCode = coupon ? coupon.code : id;
@@ -773,6 +779,108 @@ app.post("/api/orders", async (req, res) => {
   } catch (err: any) {
     console.error("[POST /api/orders] Error:", err);
     return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 16.9.5 Stripe: Create Payment Checkout Session
+app.post("/api/create-checkout-session", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const { items, shippingCharge, appliedPromo, discount, origin } = req.body;
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ message: "Invalid checkout items list" });
+    }
+
+    // Construct line items list
+    const lineItems = items.map((item: any) => ({
+      price_data: {
+        currency: "usd",
+        product_data: {
+          name: item.title,
+          images: item.image ? [item.image] : [],
+        },
+        unit_amount: Math.round(Number(item.price) * 100),
+      },
+      quantity: Number(item.quantity),
+    }));
+
+    // If shipping charge is present, add it as a line item
+    const shipFee = typeof shippingCharge !== "undefined" ? Number(shippingCharge) : 15;
+    if (shipFee > 0) {
+      lineItems.push({
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: "Standard Shipping & Handling",
+          },
+          unit_amount: Math.round(shipFee * 100),
+        },
+        quantity: 1,
+      });
+    }
+
+    // If discount coupon is present, apply it as a negative unit item
+    const discountVal = Number(discount || 0);
+    if (discountVal > 0) {
+      lineItems.push({
+        price_data: {
+          currency: "usd",
+          product_data: {
+            name: `Coupon Code: ${appliedPromo || "DISCOUNT"}`,
+          },
+          unit_amount: -Math.round(discountVal * 100),
+        },
+        quantity: 1,
+      });
+    }
+
+    const appOrigin = origin || "http://localhost:3000";
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      line_items: lineItems,
+      mode: "payment",
+      success_url: `${appOrigin}/success?session_id={CHECKOUT_SESSION_ID}&shippingCharge=${shipFee}&appliedPromo=${appliedPromo || ""}&discount=${discountVal}`,
+      cancel_url: `${appOrigin}/cart`,
+      metadata: {
+        userId: payload.id,
+        userEmail: payload.email,
+        itemsJson: JSON.stringify(items.map((it: any) => ({
+          plantId: it.plantId,
+          title: it.title,
+          quantity: it.quantity,
+          price: it.price
+        }))),
+        shippingCharge: String(shipFee),
+        appliedPromo: appliedPromo || "",
+        discount: String(discountVal),
+      },
+    });
+
+    return res.status(200).json({ url: session.url, sessionId: session.id });
+  } catch (err: any) {
+    console.error("[POST /api/create-checkout-session] Error:", err);
+    return res.status(500).json({ message: err.message || "Internal server error" });
+  }
+});
+
+// 16.9.6 Stripe: Retrieve Completed Checkout Session Details
+app.get("/api/checkout-session/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const session = await stripe.checkout.sessions.retrieve(id);
+    return res.status(200).json(session);
+  } catch (err: any) {
+    return res.status(500).json({ message: err.message || "Internal server error" });
   }
 });
 
@@ -887,7 +995,7 @@ async function checkExpiredPromos() {
         { key: "system_features" },
         { $set: { value: current } }
       );
-      
+
       // Log as system actions
       for (const logText of expiredLogs) {
         await db.collection("logs").insertOne({
@@ -957,7 +1065,7 @@ app.post("/api/admin/config", async (req, res) => {
     } = req.body;
 
     const { db } = await connectToDatabase();
-    
+
     // Fetch current settings to identify changes
     const configDoc = await db.collection("config").findOne({ key: "system_features" });
     const currentVal = configDoc ? configDoc.value : {
