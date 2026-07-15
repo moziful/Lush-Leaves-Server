@@ -22,7 +22,7 @@ const PORT = process.env.PORT || 5000;
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
-const googleClient = new OAuth2Client(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID);
+
 
 // Multer memory storage configuration for file uploads
 const upload = multer({ storage: multer.memoryStorage() });
@@ -180,10 +180,14 @@ app.post("/api/auth/google", async (req, res) => {
       return res.status(400).json({ message: "Google credential token is required." });
     }
 
+    // Instantiate Google OAuth client
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "99733512684-n5hudt7amkpacib5kgfs54vfbjd7dkdd.apps.googleusercontent.com";
+    const googleClient = new OAuth2Client(clientId);
+
     // Verify Google ID Token
     const ticket = await googleClient.verifyIdToken({
       idToken: credential,
-      audience: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+      audience: clientId,
     });
     const payload = ticket.getPayload();
     if (!payload || !payload.email) {
