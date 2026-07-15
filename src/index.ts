@@ -660,7 +660,7 @@ app.post("/api/admin/coupons", async (req, res) => {
     };
 
     await db.collection("coupons").insertOne(newCoupon);
-    await logAdminAction(payload.email, `Created promo code: ${newCoupon.code}`);
+    await logAdminAction(payload.email, `created promo code: ${newCoupon.code} ($${newCoupon.discount.toFixed(2)} off)`);
     return res.status(201).json({ message: "Promo code created successfully" });
   } catch (err: any) {
     return res.status(500).json({ message: "Internal server error" });
@@ -689,13 +689,19 @@ app.delete("/api/admin/coupons/:id", async (req, res) => {
     }
 
     const { db } = await connectToDatabase();
+    
+    // Fetch coupon details first to log its name & discount
+    const coupon = await db.collection("coupons").findOne({ _id: couponId });
+    const couponCode = coupon ? coupon.code : id;
+    const couponDiscount = coupon ? `$${coupon.discount.toFixed(2)} off` : "";
+
     const result = await db.collection("coupons").deleteOne({ _id: couponId });
 
     if (result.deletedCount === 0) {
       return res.status(404).json({ message: "Promo code not found" });
     }
 
-    await logAdminAction(payload.email, `Deleted promo code ID: ${id}`);
+    await logAdminAction(payload.email, `deleted promo code: ${couponCode} ${couponDiscount ? `(${couponDiscount})` : ""}`);
     return res.status(200).json({ message: "Promo code deleted successfully" });
   } catch (err: any) {
     return res.status(500).json({ message: "Internal server error" });
@@ -758,13 +764,73 @@ app.patch("/api/admin/orders/:id", async (req, res) => {
   }
 });
 
+// Background worker to automatically turn off expired promos & log them
+async function checkExpiredPromos() {
+  try {
+    const { db } = await connectToDatabase();
+    const configDoc = await db.collection("config").findOne({ key: "system_features" });
+    if (!configDoc) return;
+
+    const current = configDoc.value;
+    const now = new Date().getTime();
+    let changed = false;
+    const expiredLogs: string[] = [];
+
+    // Check Free Shipping Promo Expiry
+    if (current.freeShippingPromo && current.freeShippingExpiry && now > new Date(current.freeShippingExpiry).getTime()) {
+      current.freeShippingPromo = false;
+      current.freeShippingExpiry = null;
+      changed = true;
+      expiredLogs.push("system turned off free shipping promo");
+    }
+
+    // Check Seasonal Banner Expiry
+    if (current.seasonalBanner && current.seasonalBannerExpiry && now > new Date(current.seasonalBannerExpiry).getTime()) {
+      current.seasonalBanner = false;
+      current.seasonalBannerExpiry = null;
+      changed = true;
+      expiredLogs.push("system turned off seasonal banner");
+    }
+
+    if (changed) {
+      await db.collection("config").updateOne(
+        { key: "system_features" },
+        { $set: { value: current } }
+      );
+      
+      // Log as system actions
+      for (const logText of expiredLogs) {
+        await db.collection("logs").insertOne({
+          admin: "system",
+          action: logText,
+          timestamp: new Date(),
+        });
+      }
+      console.log(`[system] Auto-deactivated expired flags: ${expiredLogs.join(", ")}`);
+    }
+  } catch (err) {
+    console.error("Error checking expired promo tags:", err);
+  }
+}
+
+// Check every 10 seconds
+setInterval(checkExpiredPromos, 10000);
+
 // 18. Admin: Get and Update System Feature Flags
 app.get("/api/admin/config", async (req, res) => {
   try {
     const { db } = await connectToDatabase();
     const config = await db.collection("config").findOne({ key: "system_features" });
     if (!config) {
-      return res.status(200).json({ maintenanceMode: false, checkoutEnabled: true });
+      return res.status(200).json({
+        maintenanceMode: false,
+        checkoutEnabled: true,
+        freeShippingPromo: false,
+        freeShippingExpiry: null,
+        seasonalBanner: false,
+        seasonalBannerExpiry: null,
+        emailNotifications: true
+      });
     }
     return res.status(200).json(config.value);
   } catch (err: any) {
@@ -784,33 +850,72 @@ app.post("/api/admin/config", async (req, res) => {
       return res.status(403).json({ message: "Forbidden: Admin access required" });
     }
 
-    const { maintenanceMode, checkoutEnabled } = req.body;
+    const {
+      maintenanceMode,
+      checkoutEnabled,
+      freeShippingPromo,
+      freeShippingExpiry,
+      seasonalBanner,
+      seasonalBannerExpiry,
+      emailNotifications
+    } = req.body;
+
     const { db } = await connectToDatabase();
     
     // Fetch current settings to identify changes
     const configDoc = await db.collection("config").findOne({ key: "system_features" });
-    const currentVal = configDoc ? configDoc.value : { maintenanceMode: false, checkoutEnabled: true };
+    const currentVal = configDoc ? configDoc.value : {
+      maintenanceMode: false,
+      checkoutEnabled: true,
+      freeShippingPromo: false,
+      freeShippingExpiry: null,
+      seasonalBanner: false,
+      seasonalBannerExpiry: null,
+      emailNotifications: true
+    };
+
+    const nextVal = {
+      maintenanceMode: Boolean(maintenanceMode),
+      checkoutEnabled: Boolean(checkoutEnabled),
+      freeShippingPromo: Boolean(freeShippingPromo),
+      freeShippingExpiry: freeShippingExpiry ? new Date(freeShippingExpiry).toISOString() : null,
+      seasonalBanner: Boolean(seasonalBanner),
+      seasonalBannerExpiry: seasonalBannerExpiry ? new Date(seasonalBannerExpiry).toISOString() : null,
+      emailNotifications: Boolean(emailNotifications),
+    };
 
     await db.collection("config").updateOne(
       { key: "system_features" },
-      { $set: { value: { maintenanceMode: Boolean(maintenanceMode), checkoutEnabled: Boolean(checkoutEnabled) } } },
+      { $set: { value: nextVal } },
       { upsert: true }
     );
 
     // Build user-friendly change log string
     const changes: string[] = [];
-    if (currentVal.maintenanceMode !== Boolean(maintenanceMode)) {
-      changes.push(`turned ${maintenanceMode ? "on" : "off"} maintenance mode`);
+    if (currentVal.maintenanceMode !== nextVal.maintenanceMode) {
+      changes.push(`turned ${nextVal.maintenanceMode ? "on" : "off"} maintenance mode`);
     }
-    if (currentVal.checkoutEnabled !== Boolean(checkoutEnabled)) {
-      changes.push(`turned ${checkoutEnabled ? "on" : "off"} checkout features`);
+    if (currentVal.checkoutEnabled !== nextVal.checkoutEnabled) {
+      changes.push(`turned ${nextVal.checkoutEnabled ? "on" : "off"} checkout features`);
+    }
+    if (currentVal.freeShippingPromo !== nextVal.freeShippingPromo) {
+      changes.push(`turned ${nextVal.freeShippingPromo ? "on" : "off"} free shipping promo`);
+    }
+    if (currentVal.seasonalBanner !== nextVal.seasonalBanner) {
+      changes.push(`turned ${nextVal.seasonalBanner ? "on" : "off"} seasonal banner`);
+    }
+    if (currentVal.emailNotifications !== nextVal.emailNotifications) {
+      changes.push(`turned ${nextVal.emailNotifications ? "on" : "off"} email notifications`);
     }
 
-    const actionText = changes.length > 0 ? changes.join(" and ") : "saved system settings";
-    await logAdminAction(payload.email, actionText);
+    if (changes.length > 0) {
+      const actionText = changes.join(" and ");
+      await logAdminAction(payload.email, actionText);
+    }
 
     return res.status(200).json({ message: "System configuration updated successfully" });
   } catch (err: any) {
+    console.error("[POST /api/admin/config] Error:", err);
     return res.status(500).json({ message: "Internal server error" });
   }
 });
