@@ -232,7 +232,7 @@ app.post("/api/auth/google", async (req, res) => {
     const token = signToken({
       userId,
       email: email.toLowerCase(),
-      role: userRole,
+      role: userRole as "user" | "admin",
     });
 
     return res.status(200).json({
@@ -898,7 +898,7 @@ app.post("/api/orders", async (req, res) => {
 
     const { db } = await connectToDatabase();
     const newOrder = {
-      userId: payload.id,
+      userId: payload.userId,
       userEmail: payload.email,
       items: items.map((item: any) => ({
         plantId: item.plantId,
@@ -961,6 +961,7 @@ app.post("/api/create-checkout-session", async (req, res) => {
           currency: "usd",
           product_data: {
             name: "Standard Shipping & Handling",
+            images: [],
           },
           unit_amount: Math.round(shipFee * 100),
         },
@@ -976,6 +977,7 @@ app.post("/api/create-checkout-session", async (req, res) => {
           currency: "usd",
           product_data: {
             name: `Coupon Code: ${appliedPromo || "DISCOUNT"}`,
+            images: [],
           },
           unit_amount: -Math.round(discountVal * 100),
         },
@@ -992,7 +994,7 @@ app.post("/api/create-checkout-session", async (req, res) => {
       success_url: `${appOrigin}/success?session_id={CHECKOUT_SESSION_ID}&shippingCharge=${shipFee}&appliedPromo=${appliedPromo || ""}&discount=${discountVal}`,
       cancel_url: `${appOrigin}/cart`,
       metadata: {
-        userId: payload.id,
+        userId: payload.userId,
         userEmail: payload.email,
         itemsJson: JSON.stringify(items.map((it: any) => ({
           plantId: it.plantId,
