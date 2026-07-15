@@ -613,6 +613,30 @@ async function logAdminAction(email: string, action: string) {
   }
 }
 
+// 15.9 User: Validate Coupon Code publicly
+app.get("/api/promo/validate", async (req, res) => {
+  try {
+    const { code } = req.query;
+    if (!code) {
+      return res.status(400).json({ message: "Code parameter is required" });
+    }
+
+    const { db } = await connectToDatabase();
+    const coupon = await db.collection("coupons").findOne({
+      code: String(code).toUpperCase(),
+      isActive: true
+    });
+
+    if (!coupon) {
+      return res.status(404).json({ message: "Invalid or inactive promo code" });
+    }
+
+    return res.status(200).json({ code: coupon.code, discount: coupon.discount });
+  } catch (err: any) {
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 // 16. Admin: Get and Create Promo Codes (Coupons)
 app.get("/api/admin/coupons", async (req, res) => {
   try {
@@ -721,8 +745,8 @@ app.post("/api/orders", async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    const { items, total } = req.body;
-    if (!items || !Array.isArray(items) || items.length === 0 || !total) {
+    const { items, total, shippingCharge, appliedPromo, discount } = req.body;
+    if (!items || !Array.isArray(items) || items.length === 0 || typeof total === "undefined") {
       return res.status(400).json({ message: "Invalid checkout request body" });
     }
 
@@ -737,6 +761,9 @@ app.post("/api/orders", async (req, res) => {
         price: Number(item.price)
       })),
       total: Number(total),
+      shippingCharge: typeof shippingCharge !== "undefined" ? Number(shippingCharge) : 15,
+      appliedPromo: appliedPromo || null,
+      discount: typeof discount !== "undefined" ? Number(discount) : 0,
       status: "Pending",
       createdAt: new Date()
     };
@@ -892,10 +919,15 @@ app.get("/api/admin/config", async (req, res) => {
         freeShippingExpiry: null,
         seasonalBanner: false,
         seasonalBannerExpiry: null,
-        emailNotifications: true
+        emailNotifications: true,
+        shippingCharge: 15
       });
     }
-    return res.status(200).json(config.value);
+    const val = config.value;
+    if (typeof val.shippingCharge === "undefined") {
+      val.shippingCharge = 15;
+    }
+    return res.status(200).json(val);
   } catch (err: any) {
     return res.status(500).json({ message: "Internal server error" });
   }
@@ -920,7 +952,8 @@ app.post("/api/admin/config", async (req, res) => {
       freeShippingExpiry,
       seasonalBanner,
       seasonalBannerExpiry,
-      emailNotifications
+      emailNotifications,
+      shippingCharge
     } = req.body;
 
     const { db } = await connectToDatabase();
@@ -934,7 +967,8 @@ app.post("/api/admin/config", async (req, res) => {
       freeShippingExpiry: null,
       seasonalBanner: false,
       seasonalBannerExpiry: null,
-      emailNotifications: true
+      emailNotifications: true,
+      shippingCharge: 15
     };
 
     const nextVal = {
@@ -945,6 +979,7 @@ app.post("/api/admin/config", async (req, res) => {
       seasonalBanner: Boolean(seasonalBanner),
       seasonalBannerExpiry: seasonalBannerExpiry ? new Date(seasonalBannerExpiry).toISOString() : null,
       emailNotifications: Boolean(emailNotifications),
+      shippingCharge: typeof shippingCharge !== "undefined" ? Number(shippingCharge) : 15
     };
 
     await db.collection("config").updateOne(
@@ -969,6 +1004,9 @@ app.post("/api/admin/config", async (req, res) => {
     }
     if (currentVal.emailNotifications !== nextVal.emailNotifications) {
       changes.push(`turned ${nextVal.emailNotifications ? "on" : "off"} email notifications`);
+    }
+    if (Number(currentVal.shippingCharge) !== Number(nextVal.shippingCharge)) {
+      changes.push(`updated shipping charge to $${Number(nextVal.shippingCharge).toFixed(2)}`);
     }
 
     if (changes.length > 0) {
