@@ -6,6 +6,7 @@ import { ObjectId } from "mongodb";
 import { connectToDatabase } from "./db";
 import { hashPassword, verifyPassword, signToken, verifyToken } from "./auth";
 import Stripe from "stripe";
+import { OAuth2Client } from "google-auth-library";
 
 dotenv.config();
 
@@ -20,6 +21,8 @@ const PORT = process.env.PORT || 5000;
 // Enable CORS and JSON parsing.
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
+
+const googleClient = new OAuth2Client(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID);
 
 // Multer memory storage configuration for file uploads
 const upload = multer({ storage: multer.memoryStorage() });
@@ -166,6 +169,86 @@ app.post("/api/auth/login", async (req, res) => {
   } catch (err: any) {
     console.error("Login Error:", err);
     return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// 3.5 Google Sign-in Verification Route (POST /api/auth/google)
+app.post("/api/auth/google", async (req, res) => {
+  try {
+    const { credential } = req.body;
+    if (!credential) {
+      return res.status(400).json({ message: "Google credential token is required." });
+    }
+
+    // Verify Google ID Token
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    if (!payload || !payload.email) {
+      return res.status(400).json({ message: "Invalid Google ID token payload." });
+    }
+
+    const { email, name, picture } = payload;
+    const { db } = await connectToDatabase();
+
+    // Check if user already exists
+    let user = await db.collection("users").findOne({ email: email.toLowerCase() });
+    
+    let userId: string;
+    let userRole = "user";
+    let userName = name || "";
+    let userImageUrl = picture || "";
+
+    if (!user) {
+      // First time Google user: create account automatically
+      const newUser = {
+        name: userName,
+        email: email.toLowerCase(),
+        role: "user",
+        imageUrl: userImageUrl,
+        createdAt: new Date(),
+        // No password hash since it's a social account
+        passwordHash: "",
+      };
+      const result = await db.collection("users").insertOne(newUser);
+      userId = result.insertedId.toString();
+    } else {
+      userId = user._id.toString();
+      userRole = user.role || "user";
+      // Update image or name if they were blank previously
+      const updates: Record<string, string> = {};
+      if (!user.name && userName) updates.name = userName;
+      if (!user.imageUrl && userImageUrl) updates.imageUrl = userImageUrl;
+      if (Object.keys(updates).length > 0) {
+        await db.collection("users").updateOne({ _id: user._id }, { $set: updates });
+      }
+      userName = user.name || userName;
+      userImageUrl = user.imageUrl || userImageUrl;
+    }
+
+    // Generate app JWT
+    const token = signToken({
+      userId,
+      email: email.toLowerCase(),
+      role: userRole,
+    });
+
+    return res.status(200).json({
+      message: "Logged in with Google successfully",
+      token,
+      user: {
+        id: userId,
+        name: userName,
+        email: email.toLowerCase(),
+        role: userRole,
+        imageUrl: userImageUrl,
+      },
+    });
+  } catch (err: any) {
+    console.error("Google Authentication Error:", err?.message || err);
+    return res.status(500).json({ message: "Google authentication failed." });
   }
 });
 
