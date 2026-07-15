@@ -329,6 +329,63 @@ app.post("/api/plants", async (req, res) => {
     return res.status(500).json({ message: "Internal server error" });
   }
 });
+// 7.5. Update an Existing Plant (Admin only)
+app.put("/api/plants/:id", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const token = authHeader.slice(7);
+    const payload = verifyToken(token);
+    if (!payload || payload.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden: Admin access required" });
+    }
+    const { id } = req.params;
+    let plantId: ObjectId;
+    try {
+      plantId = new ObjectId(id);
+    } catch {
+      return res.status(400).json({ message: "Invalid plant ID" });
+    }
+    const {
+      title, scientificName, category, short, description,
+      price, image, difficulty, watering, sunlight,
+      temperature, detailedCare, commonProblems,
+    } = req.body;
+    if (!title || !price || !image) {
+      return res.status(400).json({ message: "title, price, and image are required" });
+    }
+    const { db } = await connectToDatabase();
+    const updatedPlant = {
+      title: String(title).trim(),
+      scientificName: String(scientificName || "").trim(),
+      category: String(category || "Foliage").trim(),
+      short: String(short || "").trim(),
+      description: String(description || "").trim(),
+      price: Number(price),
+      image: String(image).trim(),
+      difficulty: ["Easy", "Medium", "Hard"].includes(difficulty) ? difficulty : "Easy",
+      watering: String(watering || "").trim(),
+      sunlight: String(sunlight || "").trim(),
+      temperature: String(temperature || "").trim(),
+      detailedCare: Array.isArray(detailedCare) ? detailedCare : [],
+      commonProblems: Array.isArray(commonProblems) ? commonProblems : [],
+    };
+    const result = await db.collection("plants").updateOne(
+      { _id: plantId },
+      { $set: updatedPlant }
+    );
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Plant not found" });
+    }
+    await logAdminAction(payload.email, `Updated plant: "${updatedPlant.title}" (${updatedPlant.category})`);
+    return res.status(200).json({ message: "Plant updated successfully" });
+  } catch (err: any) {
+    console.error("[PUT /api/plants/:id] Error:", err?.message || err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
 
 // 8. Delete a Plant (Admin only)
 app.delete("/api/plants/:id", async (req, res) => {
